@@ -1,11 +1,31 @@
 import express from "express";
 import authMiddleware from "../middleware/authMiddleware.js";
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
-import { assignReviewer, publishManuscript } from "../controllers/adminController.js";
+import {
+  getAllManuscripts,
+  assignReviewer,
+  togglePublishManuscript, // updated
+  getManuscriptFile,
+} from "../controllers/adminController.js";
 
 const router = express.Router();
 
-router.put("/assign-reviewer/:id", authMiddleware, authorizeRoles("admin"), assignReviewer);
-router.put("/publish/:id", authMiddleware, authorizeRoles("admin"), publishManuscript);
+// Protect all routes
+router.use(authMiddleware);
+
+// Only allow admins
+router.use(authorizeRoles("admin"));
+
+// Get all manuscripts
+router.get("/manuscripts", getAllManuscripts);
+
+// Assign reviewer to a manuscript
+router.post("/manuscripts/assign-reviewer", assignReviewer);
+
+// Publish / Unpublish manuscript
+router.post("/manuscripts/publish-toggle", togglePublishManuscript);
+
+// Download any manuscript file
+router.get("/manuscripts/:id/file", getManuscriptFile);
 
 export default router;

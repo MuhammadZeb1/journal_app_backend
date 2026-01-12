@@ -7,7 +7,7 @@ import roleRoutes from "./routes/expertRequestRoutes.js";
 import cors from "cors";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import passport from "passport";
-import manuscriptRoutes from "./routes/manuscriptRoutes.js";
+import authorRoutes from "./routes/authorRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import reviewerRoutes from "./routes/reviewerRoutes.js";
 import { authorizeRoles } from "./middleware/roleMiddleware.js"; //
@@ -32,7 +32,7 @@ app.use(passport.initialize());
 app.use("/api/auth", authRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/roles", roleRoutes);
-app.use("/api/manuscripts", manuscriptRoutes);
+app.use("/api/author", authorRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/reviewer", reviewerRoutes);
 
