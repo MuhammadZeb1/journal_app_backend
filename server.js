@@ -1,0 +1,41 @@
+import "dotenv/config"; // 👈 THIS LINE FIXES EVERYTHING
+
+import express from "express";
+import connectDB from "./config/db.js";
+import authRoutes from "./routes/authRoutes.js";
+import roleRoutes from "./routes/expertRequestRoutes.js";
+import cors from "cors";
+import notificationRoutes from "./routes/notificationRoutes.js";
+import passport from "passport";
+import manuscriptRoutes from "./routes/manuscriptRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
+import reviewerRoutes from "./routes/reviewerRoutes.js";
+import { authorizeRoles } from "./middleware/roleMiddleware.js"; //
+
+import "./config/passport.js"; // 👈 now env is READY
+
+connectDB();
+
+
+const app = express();
+
+app.use(express.json());
+app.use(
+  cors({
+    origin: "http://localhost:5173",
+    credentials: true,
+  })
+);
+
+app.use(passport.initialize());
+
+app.use("/api/auth", authRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/roles", roleRoutes);
+app.use("/api/manuscripts", manuscriptRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/reviewer", reviewerRoutes);
+
+app.listen(process.env.PORT || 5000, () => {
+  console.log(`Server running on port ${process.env.PORT || 5000}`);
+});
