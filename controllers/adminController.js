@@ -19,6 +19,19 @@ export const getAllManuscripts = async (req, res) => {
 };
 
 /**
+ * GET all experts
+ * Admin can assign reviewers
+ */
+export const getAllExperts = async (req, res) => {
+  try {
+    const experts = await User.find({ role: "expert" }).select("name email");
+    res.json(experts);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+/**
  * ASSIGN reviewer to a manuscript
  * Only allowed if status is pending
  */
@@ -53,8 +66,6 @@ export const assignReviewer = async (req, res) => {
 
 /**
  * PUBLISH / UNPUBLISH a manuscript
- * Admin can only publish accepted manuscripts
- * Admin can unpublish published manuscripts
  */
 export const togglePublishManuscript = async (req, res) => {
   try {

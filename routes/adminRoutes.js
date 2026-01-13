@@ -4,8 +4,9 @@ import { authorizeRoles } from "../middleware/roleMiddleware.js";
 import {
   getAllManuscripts,
   assignReviewer,
-  togglePublishManuscript, // updated
+  togglePublishManuscript,
   getManuscriptFile,
+  getAllExperts, // <-- add this
 } from "../controllers/adminController.js";
 
 const router = express.Router();
@@ -18,6 +19,9 @@ router.use(authorizeRoles("admin"));
 
 // Get all manuscripts
 router.get("/manuscripts", getAllManuscripts);
+
+// Get all experts (for assigning reviewers)
+router.get("/experts", getAllExperts);
 
 // Assign reviewer to a manuscript
 router.post("/manuscripts/assign-reviewer", assignReviewer);
