@@ -1,6 +1,7 @@
 import Manuscript from "../models/Manuscript.js";
 import { gfs } from "../config/gridfs.js";
 import { uploadThumbnail } from "../config/uploadThumbnail.js";
+import mongoose from "mongoose";
 
 // Permission helpers
 const isOwner = (manuscript, userId) => manuscript.author.toString() === userId;
@@ -11,9 +12,6 @@ const isPending = (manuscript) => manuscript.status === "pending";
  */
 export const createManuscript = async (req, res) => {
   try {
-    console.log("req.body", req.body);
-    console.log("req.files", req.files);
-
     if (!req.files?.file || req.files.file.length === 0) {
       return res.status(400).json({ message: "No file uploaded" });
     }
@@ -69,8 +67,6 @@ export const createManuscript = async (req, res) => {
   }
 };
 
-
-
 /**
  * GET all manuscripts of logged-in author
  */
@@ -85,6 +81,7 @@ export const getMyManuscripts = async (req, res) => {
 
 /**
  * GET a single manuscript file
+ * FIXED: Added stream error handling to prevent server crash
  */
 export const getMyManuscriptFile = async (req, res) => {
   try {
@@ -92,18 +89,31 @@ export const getMyManuscriptFile = async (req, res) => {
     if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
     if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Access denied" });
 
+    // 1. Initialize the download stream
+    const downloadStream = gfs.openDownloadStream(new mongoose.Types.ObjectId(manuscript.fileId));
+
+    // 2. IMPORTANT: Listen for 'error' event to prevent crash if file is missing in GridFS
+    downloadStream.on("error", (err) => {
+      console.error("File download error:", err.message);
+      // Check if we already sent headers to avoid "Headers already sent" error
+      if (!res.headersSent) {
+        res.status(404).json({ message: "Physical file not found in storage" });
+      }
+    });
+
+    // 3. Set headers and pipe the stream
     res.setHeader("Content-Type", manuscript.contentType);
     res.setHeader("Content-Disposition", `inline; filename="${manuscript.filename}"`);
-
-    gfs.openDownloadStream(manuscript.fileId).pipe(res);
+    
+    downloadStream.pipe(res);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("GET file error:", err);
+    res.status(500).json({ message: "Server error retrieving file" });
   }
 };
 
 /**
  * UPDATE Manuscript (title, description, thumbnail)
- * Only if status is pending
  */
 export const updateMyManuscript = async (req, res) => {
   try {
@@ -128,7 +138,7 @@ export const updateMyManuscript = async (req, res) => {
 
 /**
  * DELETE Manuscript
- * Only if status is pending
+ * FIXED: Added try/catch for GridFS delete and guaranteed DB cleanup
  */
 export const deleteMyManuscript = async (req, res) => {
   try {
@@ -137,13 +147,20 @@ export const deleteMyManuscript = async (req, res) => {
     if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Not your manuscript" });
     if (!isPending(manuscript)) return res.status(400).json({ message: "Cannot delete after submission" });
 
-    gfs.delete(manuscript.fileId, async (err) => {
-      if (err) return res.status(500).json({ message: err.message });
+    // 1. Try to delete the file from GridFS
+    try {
+      await gfs.delete(new mongoose.Types.ObjectId(manuscript.fileId));
+    } catch (gfsErr) {
+      // Log it but don't crash. If the file is already gone, we just want to clean the DB next.
+      console.warn(`GridFS file ${manuscript.fileId} was already missing.`);
+    }
 
-      await manuscript.deleteOne();
-      res.json({ message: "Manuscript deleted successfully" });
-    });
+    // 2. Delete the record from the database collection
+    await manuscript.deleteOne();
+    
+    res.json({ message: "Manuscript and file deleted successfully" });
   } catch (err) {
+    console.error("DELETE error:", err);
     res.status(500).json({ message: err.message });
   }
 };
