@@ -2,6 +2,7 @@
 import Manuscript from "../models/Manuscript.js";
 import User from "../models/User.js";
 import { gfs } from "../config/gridfs.js";
+import mongoose from "mongoose";
 
 /**
  * GET all manuscripts
@@ -104,15 +105,17 @@ export const togglePublishManuscript = async (req, res) => {
 export const getManuscriptFile = async (req, res) => {
   try {
     const manuscript = await Manuscript.findById(req.params.id);
-    if (!manuscript) return res.sendStatus(404);
+    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
 
-    res.setHeader("Content-Type", manuscript.contentType);
+    res.setHeader("Content-Type", manuscript.contentType || "application/pdf");
     res.setHeader(
       "Content-Disposition",
       `inline; filename="${manuscript.filename}"`
     );
 
-    gfs.openDownloadStream(manuscript.fileId).pipe(res);
+    // Convert string fileId to ObjectId
+    const objectId = new mongoose.Types.ObjectId(manuscript.fileId);
+    gfs.openDownloadStream(objectId).pipe(res);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
