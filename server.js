@@ -24,7 +24,7 @@ const app = express();
 app.use(express.json());
 app.use(
   cors({
-    origin: ["http://localhost:3000", "https://journal-app-frontend-five.vercel.app"],
+    origin: "http://localhost:5173",
     credentials: true,
   })
 );
