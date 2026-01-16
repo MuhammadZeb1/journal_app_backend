@@ -131,18 +131,24 @@ export const getManuscriptFile = async (req, res) => {
     if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
 
     const objectId = new mongoose.Types.ObjectId(manuscript.fileId);
-    const downloadStream = gfs.openDownloadStream(objectId);
 
-    const chunks = [];
-    downloadStream.on("data", (chunk) => chunks.push(chunk));
-    downloadStream.on("error", (err) => res.status(500).json({ message: err.message }));
-    downloadStream.on("end", () => {
-      const fileBuffer = Buffer.concat(chunks);
-      res.setHeader("Content-Type", manuscript.contentType || "application/pdf");
-      res.setHeader("Content-Disposition", `inline; filename="${manuscript.filename}"`);
-      res.send(fileBuffer);
+    // Force the stream into a Promise so Vercel doesn't kill the function early
+    const fileBuffer = await new Promise((resolve, reject) => {
+      const chunks = [];
+      const downloadStream = gfs.openDownloadStream(objectId);
+
+      downloadStream.on("data", (chunk) => chunks.push(chunk));
+      downloadStream.on("error", (err) => reject(err));
+      downloadStream.on("end", () => resolve(Buffer.concat(chunks)));
     });
+
+    res.setHeader("Content-Type", manuscript.contentType || "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${manuscript.filename}"`);
+    
+    // This will fail if fileBuffer > 4.5MB
+    return res.send(fileBuffer);
+
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    return res.status(500).json({ message: "Vercel Limit or DB Error: " + err.message });
   }
 };
