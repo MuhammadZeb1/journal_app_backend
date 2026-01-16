@@ -92,32 +92,41 @@ export const getMyManuscripts = async (req, res) => {
 };
 
 /** GET Single Secure File (Redirect) */
+/** GET Single Secure File (Signed URL) */
 export const getMyManuscriptFile = async (req, res) => {
   try {
     const manuscript = await Manuscript.findById(req.params.id);
-    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
-    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Access denied" });
+    
+    if (!manuscript) {
+      return res.status(404).json({ message: "Manuscript not found" });
+    }
+    
+    if (!isOwner(manuscript, req.user.id)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
 
-    // 1. Get the extension (pdf, docx, etc.)
     const extension = manuscript.filename.split('.').pop();
 
-    // 2. Generate the Secure URL with the correct filename attachment
-    // This tells the browser: "Download this as MyOriginalFileName.pdf"
+    // Generate the Secure URL
     const signedUrl = cloudinary.utils.private_download_url(
       manuscript.fileId,
       extension,
       { 
         resource_type: "raw", 
         type: "authenticated", 
+        // URL expires in 60 seconds
         expires_at: Math.floor(Date.now() / 1000) + 60,
-        attachment: manuscript.filename // <--- THIS FIXES THE FILENAME
+        // This forces the browser to use the original filename
+        attachment: manuscript.filename 
       }
     );
 
-    res.redirect(signedUrl);
+    // Return the URL as JSON so Axios doesn't crash on redirect
+    res.json({ downloadUrl: signedUrl });
+
   } catch (err) {
-    console.error("Download Error:", err);
-    res.status(500).json({ message: "Error opening file" });
+    console.error("Download Link Error:", err);
+    res.status(500).json({ message: "Error generating secure link" });
   }
 };
 
