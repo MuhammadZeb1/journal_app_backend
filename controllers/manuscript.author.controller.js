@@ -3,12 +3,12 @@ import cloudinary from "../config/cloudinary.js";
 import streamifier from "streamifier";
 
 // --- Permission Helpers ---
-const isOwner = (manuscript, userId) => manuscript.author.toString() === userId;
+const isOwner = (manuscript, userId) => manuscript.author?.toString() === userId;
 const isPending = (manuscript) => manuscript.status === "pending";
 
 /**
  * HELPER: Pipes buffer to Cloudinary
- * type: 'authenticated' keeps manuscripts private
+ * type: 'authenticated' keeps manuscripts private (required for signed URLs)
  */
 const uploadToCloudinary = (fileBuffer, folder, resourceType = "raw") => {
   return new Promise((resolve, reject) => {
@@ -16,6 +16,7 @@ const uploadToCloudinary = (fileBuffer, folder, resourceType = "raw") => {
       {
         folder,
         resource_type: resourceType,
+        // Raw files (PDF/Word) are private; images (thumbnails) are public
         type: resourceType === "raw" ? "authenticated" : "upload",
       },
       (error, result) => {
@@ -28,14 +29,13 @@ const uploadToCloudinary = (fileBuffer, folder, resourceType = "raw") => {
 };
 
 /**
- * HELPER: Extract public_id from Cloudinary URL
- * Useful for deleting thumbnails
+ * HELPER: Extract public_id from Cloudinary URL for cleanup
  */
 const getPublicIdFromUrl = (url) => {
   if (!url) return null;
   const parts = url.split("/");
   const fileName = parts[parts.length - 1];
-  return fileName.split(".")[0]; // returns the ID without extension
+  return fileName.split(".")[0]; 
 };
 
 // --- Controllers ---
@@ -50,10 +50,10 @@ export const createManuscript = async (req, res) => {
     const manuscriptFile = req.files.file[0];
     const thumbnailFile = req.files.thumbnail?.[0];
 
-    // 1. Upload Document (PDF/Word)
+    // 1. Upload Document (PDF/Word) as 'raw' and 'authenticated'
     const fileResult = await uploadToCloudinary(manuscriptFile.buffer, "manuscripts", "raw");
 
-    // 2. Upload Thumbnail
+    // 2. Upload Thumbnail as 'image'
     let thumbnailUrl = "";
     if (thumbnailFile) {
       const thumbResult = await uploadToCloudinary(thumbnailFile.buffer, "thumbnails", "image");
@@ -91,19 +91,13 @@ export const getMyManuscripts = async (req, res) => {
   }
 };
 
-/** GET Single Secure File (Redirect) */
 /** GET Single Secure File (Signed URL) */
 export const getMyManuscriptFile = async (req, res) => {
   try {
     const manuscript = await Manuscript.findById(req.params.id);
     
-    if (!manuscript) {
-      return res.status(404).json({ message: "Manuscript not found" });
-    }
-    
-    if (!isOwner(manuscript, req.user.id)) {
-      return res.status(403).json({ message: "Access denied" });
-    }
+    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
+    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Access denied" });
 
     const extension = manuscript.filename.split('.').pop();
 
@@ -114,16 +108,13 @@ export const getMyManuscriptFile = async (req, res) => {
       { 
         resource_type: "raw", 
         type: "authenticated", 
-        // URL expires in 60 seconds
         expires_at: Math.floor(Date.now() / 1000) + 60,
-        // This forces the browser to use the original filename
-        attachment: manuscript.filename 
+        attachment: manuscript.filename // Forces browser to download with original name
       }
     );
 
-    // Return the URL as JSON so Axios doesn't crash on redirect
+    // Send the URL as JSON to prevent Axios CORS/Redirect errors
     res.json({ downloadUrl: signedUrl });
-
   } catch (err) {
     console.error("Download Link Error:", err);
     res.status(500).json({ message: "Error generating secure link" });
@@ -136,15 +127,17 @@ export const updateMyManuscript = async (req, res) => {
     const manuscript = await Manuscript.findById(req.params.id);
     if (!manuscript) return res.status(404).json({ message: "Not found" });
     if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Denied" });
-    if (!isPending(manuscript)) return res.status(400).json({ message: "Locked" });
+    if (!isPending(manuscript)) return res.status(400).json({ message: "Locked: Cannot update after submission" });
 
-    // Update basic info
+    // Update text fields
     manuscript.title = req.body.title ?? manuscript.title;
     manuscript.description = req.body.description ?? manuscript.description;
 
-    // A. Replace Main File
+    // A. Replace Main Document
     if (req.files?.file) {
+      // Delete old file from Cloudinary first
       await cloudinary.uploader.destroy(manuscript.fileId, { resource_type: "raw" });
+      
       const result = await uploadToCloudinary(req.files.file[0].buffer, "manuscripts", "raw");
       
       manuscript.fileId = result.public_id;
@@ -156,7 +149,7 @@ export const updateMyManuscript = async (req, res) => {
 
     // B. Replace Thumbnail
     if (req.files?.thumbnail) {
-      // Cleanup old thumbnail if it exists
+      // Delete old thumbnail if it exists
       if (manuscript.imageUrl) {
         const oldThumbId = `thumbnails/${getPublicIdFromUrl(manuscript.imageUrl)}`;
         await cloudinary.uploader.destroy(oldThumbId).catch(() => null);
@@ -178,11 +171,12 @@ export const deleteMyManuscript = async (req, res) => {
     const manuscript = await Manuscript.findById(req.params.id);
     if (!manuscript) return res.status(404).json({ message: "Not found" });
     if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Denied" });
+    if (!isPending(manuscript)) return res.status(400).json({ message: "Cannot delete after submission" });
 
     // 1. Delete Main File (Private Raw)
     await cloudinary.uploader.destroy(manuscript.fileId, { resource_type: "raw" });
 
-    // 2. Delete Thumbnail (Public Image)
+    // 2. Delete Thumbnail if exists
     if (manuscript.imageUrl) {
       const thumbId = `thumbnails/${getPublicIdFromUrl(manuscript.imageUrl)}`;
       await cloudinary.uploader.destroy(thumbId).catch(() => null);
@@ -191,7 +185,7 @@ export const deleteMyManuscript = async (req, res) => {
     // 3. Delete from DB
     await manuscript.deleteOne();
     
-    res.json({ message: "Manuscript and storage cleared" });
+    res.json({ message: "Manuscript and all files deleted successfully" });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
