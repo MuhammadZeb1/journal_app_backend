@@ -95,23 +95,29 @@ export const getMyManuscripts = async (req, res) => {
 export const getMyManuscriptFile = async (req, res) => {
   try {
     const manuscript = await Manuscript.findById(req.params.id);
-    if (!manuscript) return res.status(404).json({ message: "Not found" });
-    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Denied" });
+    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
+    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Access denied" });
 
+    // 1. Get the extension (pdf, docx, etc.)
     const extension = manuscript.filename.split('.').pop();
+
+    // 2. Generate the Secure URL with the correct filename attachment
+    // This tells the browser: "Download this as MyOriginalFileName.pdf"
     const signedUrl = cloudinary.utils.private_download_url(
       manuscript.fileId,
       extension,
       { 
         resource_type: "raw", 
         type: "authenticated", 
-        expires_at: Math.floor(Date.now() / 1000) + 60 
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+        attachment: manuscript.filename // <--- THIS FIXES THE FILENAME
       }
     );
 
     res.redirect(signedUrl);
   } catch (err) {
-    res.status(500).json({ message: "Error generating secure link" });
+    console.error("Download Error:", err);
+    res.status(500).json({ message: "Error opening file" });
   }
 };
 
