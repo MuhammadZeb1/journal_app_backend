@@ -1,132 +1,153 @@
 import Manuscript from "../models/Manuscript.js";
-import { gfs } from "../config/gridfs.js";
-import { uploadThumbnail } from "../config/uploadThumbnail.js";
-import mongoose from "mongoose";
+import cloudinary from "../config/cloudinary.js";
+import streamifier from "streamifier";
 
-// Permission helpers
+// --- Permission Helpers ---
 const isOwner = (manuscript, userId) => manuscript.author.toString() === userId;
 const isPending = (manuscript) => manuscript.status === "pending";
 
 /**
- * CREATE Manuscript
+ * HELPER: Pipes buffer to Cloudinary
+ * type: 'authenticated' keeps manuscripts private
  */
+const uploadToCloudinary = (fileBuffer, folder, resourceType = "raw") => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder,
+        resource_type: resourceType,
+        type: resourceType === "raw" ? "authenticated" : "upload",
+      },
+      (error, result) => {
+        if (result) resolve(result);
+        else reject(error);
+      }
+    );
+    streamifier.createReadStream(fileBuffer).pipe(stream);
+  });
+};
+
+/**
+ * HELPER: Extract public_id from Cloudinary URL
+ * Useful for deleting thumbnails
+ */
+const getPublicIdFromUrl = (url) => {
+  if (!url) return null;
+  const parts = url.split("/");
+  const fileName = parts[parts.length - 1];
+  return fileName.split(".")[0]; // returns the ID without extension
+};
+
+// --- Controllers ---
+
+/** CREATE Manuscript */
 export const createManuscript = async (req, res) => {
   try {
-    if (!req.files?.file || req.files.file.length === 0) {
-      return res.status(400).json({ message: "No file uploaded" });
+    if (!req.files?.file) {
+      return res.status(400).json({ message: "Manuscript file is required" });
     }
 
     const manuscriptFile = req.files.file[0];
     const thumbnailFile = req.files.thumbnail?.[0];
 
-    if (!gfs) return res.status(500).json({ message: "GridFS not initialized" });
+    // 1. Upload Document (PDF/Word)
+    const fileResult = await uploadToCloudinary(manuscriptFile.buffer, "manuscripts", "raw");
 
-    const uploadStream = gfs.openUploadStream(manuscriptFile.originalname, {
+    // 2. Upload Thumbnail
+    let thumbnailUrl = "";
+    if (thumbnailFile) {
+      const thumbResult = await uploadToCloudinary(thumbnailFile.buffer, "thumbnails", "image");
+      thumbnailUrl = thumbResult.secure_url;
+    }
+
+    // 3. Save to DB
+    const manuscript = await Manuscript.create({
+      title: req.body.title,
+      description: req.body.description,
+      fileId: fileResult.public_id,
+      fileUrl: fileResult.secure_url,
+      filename: manuscriptFile.originalname,
       contentType: manuscriptFile.mimetype,
-    });
-    uploadStream.end(manuscriptFile.buffer);
-
-    uploadStream.on("finish", async () => {
-      try {
-        let thumbnailUrl = "";
-        if (thumbnailFile) {
-          try {
-            thumbnailUrl = await uploadThumbnail(thumbnailFile);
-          } catch (err) {
-            console.error("Thumbnail upload failed:", err);
-            thumbnailUrl = "";
-          }
-        }
-
-        const manuscript = await Manuscript.create({
-          title: req.body.title,
-          description: req.body.description,
-          fileId: uploadStream.id,
-          filename: manuscriptFile.originalname,
-          contentType: manuscriptFile.mimetype,
-          fileSize: manuscriptFile.size,
-          imageUrl: thumbnailUrl,
-          author: req.user.id,
-          status: "pending",
-        });
-
-        res.status(201).json(manuscript);
-      } catch (err) {
-        console.error("DB create error:", err);
-        res.status(500).json({ message: err.message });
-      }
+      fileSize: manuscriptFile.size,
+      imageUrl: thumbnailUrl,
+      author: req.user.id,
+      status: "pending",
     });
 
-    uploadStream.on("error", (err) => {
-      console.error("GridFS uploadStream error:", err);
-      res.status(500).json({ message: "File upload failed" });
-    });
+    res.status(201).json(manuscript);
   } catch (err) {
-    console.error("Unexpected error:", err);
+    console.error("Create Error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-/**
- * GET all manuscripts of logged-in author
- */
+/** GET All Personal Manuscripts */
 export const getMyManuscripts = async (req, res) => {
   try {
-    const manuscripts = await Manuscript.find({ author: req.user.id });
+    const manuscripts = await Manuscript.find({ author: req.user.id }).sort({ createdAt: -1 });
     res.json(manuscripts);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-/**
- * GET a single manuscript file
- * FIXED: Added stream error handling to prevent server crash
- */
+/** GET Single Secure File (Redirect) */
 export const getMyManuscriptFile = async (req, res) => {
   try {
     const manuscript = await Manuscript.findById(req.params.id);
-    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
-    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Access denied" });
+    if (!manuscript) return res.status(404).json({ message: "Not found" });
+    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Denied" });
 
-    // 1. Initialize the download stream
-    const downloadStream = gfs.openDownloadStream(new mongoose.Types.ObjectId(manuscript.fileId));
-
-    // 2. IMPORTANT: Listen for 'error' event to prevent crash if file is missing in GridFS
-    downloadStream.on("error", (err) => {
-      console.error("File download error:", err.message);
-      // Check if we already sent headers to avoid "Headers already sent" error
-      if (!res.headersSent) {
-        res.status(404).json({ message: "Physical file not found in storage" });
+    const extension = manuscript.filename.split('.').pop();
+    const signedUrl = cloudinary.utils.private_download_url(
+      manuscript.fileId,
+      extension,
+      { 
+        resource_type: "raw", 
+        type: "authenticated", 
+        expires_at: Math.floor(Date.now() / 1000) + 60 
       }
-    });
+    );
 
-    // 3. Set headers and pipe the stream
-    res.setHeader("Content-Type", manuscript.contentType);
-    res.setHeader("Content-Disposition", `inline; filename="${manuscript.filename}"`);
-    
-    downloadStream.pipe(res);
+    res.redirect(signedUrl);
   } catch (err) {
-    console.error("GET file error:", err);
-    res.status(500).json({ message: "Server error retrieving file" });
+    res.status(500).json({ message: "Error generating secure link" });
   }
 };
 
-/**
- * UPDATE Manuscript (title, description, thumbnail)
- */
+/** UPDATE Manuscript */
 export const updateMyManuscript = async (req, res) => {
   try {
     const manuscript = await Manuscript.findById(req.params.id);
-    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
-    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Not your manuscript" });
-    if (!isPending(manuscript)) return res.status(400).json({ message: "Cannot update after submission" });
+    if (!manuscript) return res.status(404).json({ message: "Not found" });
+    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Denied" });
+    if (!isPending(manuscript)) return res.status(400).json({ message: "Locked" });
 
+    // Update basic info
     manuscript.title = req.body.title ?? manuscript.title;
     manuscript.description = req.body.description ?? manuscript.description;
 
+    // A. Replace Main File
+    if (req.files?.file) {
+      await cloudinary.uploader.destroy(manuscript.fileId, { resource_type: "raw" });
+      const result = await uploadToCloudinary(req.files.file[0].buffer, "manuscripts", "raw");
+      
+      manuscript.fileId = result.public_id;
+      manuscript.fileUrl = result.secure_url;
+      manuscript.filename = req.files.file[0].originalname;
+      manuscript.contentType = req.files.file[0].mimetype;
+      manuscript.fileSize = req.files.file[0].size;
+    }
+
+    // B. Replace Thumbnail
     if (req.files?.thumbnail) {
-      manuscript.imageUrl = await uploadThumbnail(req.files.thumbnail[0]);
+      // Cleanup old thumbnail if it exists
+      if (manuscript.imageUrl) {
+        const oldThumbId = `thumbnails/${getPublicIdFromUrl(manuscript.imageUrl)}`;
+        await cloudinary.uploader.destroy(oldThumbId).catch(() => null);
+      }
+      const thumbResult = await uploadToCloudinary(req.files.thumbnail[0].buffer, "thumbnails", "image");
+      manuscript.imageUrl = thumbResult.secure_url;
     }
 
     await manuscript.save();
@@ -136,31 +157,27 @@ export const updateMyManuscript = async (req, res) => {
   }
 };
 
-/**
- * DELETE Manuscript
- * FIXED: Added try/catch for GridFS delete and guaranteed DB cleanup
- */
+/** DELETE Manuscript */
 export const deleteMyManuscript = async (req, res) => {
   try {
     const manuscript = await Manuscript.findById(req.params.id);
-    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
-    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Not your manuscript" });
-    if (!isPending(manuscript)) return res.status(400).json({ message: "Cannot delete after submission" });
+    if (!manuscript) return res.status(404).json({ message: "Not found" });
+    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Denied" });
 
-    // 1. Try to delete the file from GridFS
-    try {
-      await gfs.delete(new mongoose.Types.ObjectId(manuscript.fileId));
-    } catch (gfsErr) {
-      // Log it but don't crash. If the file is already gone, we just want to clean the DB next.
-      console.warn(`GridFS file ${manuscript.fileId} was already missing.`);
+    // 1. Delete Main File (Private Raw)
+    await cloudinary.uploader.destroy(manuscript.fileId, { resource_type: "raw" });
+
+    // 2. Delete Thumbnail (Public Image)
+    if (manuscript.imageUrl) {
+      const thumbId = `thumbnails/${getPublicIdFromUrl(manuscript.imageUrl)}`;
+      await cloudinary.uploader.destroy(thumbId).catch(() => null);
     }
 
-    // 2. Delete the record from the database collection
+    // 3. Delete from DB
     await manuscript.deleteOne();
     
-    res.json({ message: "Manuscript and file deleted successfully" });
+    res.json({ message: "Manuscript and storage cleared" });
   } catch (err) {
-    console.error("DELETE error:", err);
     res.status(500).json({ message: err.message });
   }
 };

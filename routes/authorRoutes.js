@@ -7,31 +7,48 @@ import {
   deleteMyManuscript,
 } from "../controllers/manuscript.author.controller.js";
 import authMiddleware from "../middleware/authMiddleware.js";
-import { upload } from "../config/multer.js"; // multer memory storage
+import upload  from "../config/multer.js"; // memory storage is essential for Vercel
 
 const router = express.Router();
 
-// Create new manuscript (file upload)
+/**
+ * 1. Create new manuscript
+ * Fields: 'file' (PDF/Word) and 'thumbnail' (Image)
+ */
 router.post(
   "/manuscripts",
   authMiddleware,
   upload.fields([
-    { name: "file", maxCount: 1 },       // manuscript file
-    { name: "thumbnail", maxCount: 1 },  // optional cover image
+    { name: "file", maxCount: 1 },
+    { name: "thumbnail", maxCount: 1 },
   ]),
   createManuscript
 );
 
-// Get all manuscripts of logged-in author
+/** * 2. Get all manuscripts of logged-in author 
+ */
 router.get("/manuscripts", authMiddleware, getMyManuscripts);
 
-// Get file of a manuscript (author can only access own files)
+/** * 3. Get file (Secure signed URL redirect) 
+ */
 router.get("/manuscripts/:id/file", authMiddleware, getMyManuscriptFile);
 
-// Update manuscript (only pending)
-router.put("/manuscripts/:id", authMiddleware, updateMyManuscript);
+/**
+ * 4. Update manuscript (only pending)
+ * ADDED Multer fields here so you can replace the PDF or Thumbnail
+ */
+router.put(
+  "/manuscripts/:id",
+  authMiddleware,
+  upload.fields([
+    { name: "file", maxCount: 1 },
+    { name: "thumbnail", maxCount: 1 },
+  ]),
+  updateMyManuscript
+);
 
-// Delete manuscript (only pending)
+/** * 5. Delete manuscript (clears Cloudinary storage too) 
+ */
 router.delete("/manuscripts/:id", authMiddleware, deleteMyManuscript);
 
 export default router;
