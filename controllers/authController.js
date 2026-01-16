@@ -43,7 +43,8 @@ export const googleAuthSuccess = async (req, res) => {
       { expiresIn: "1d" }
     );
 
-    res.redirect(`http://localhost:5173/login-success?token=${token}`);
+    // res.redirect(`http://localhost:5173/login-success?token=${token}`);
+    res.redirect(`https://journal-app-frontend-five.vercel.app/login-success?token=${token}`);
   } catch (error) {
     res.status(500).json({ message: "Google Auth Failed" });
   }
@@ -108,7 +109,9 @@ export const forgotPassword = async (req, res) => {
 
     await user.save();
 
-    const resetUrl = `http://localhost:5173/reset-password/${resetToken}`;
+    // const resetUrl = `http://localhost:5173/reset-password/${resetToken}`;
+    const resetUrl = `https://journal-app-frontend-five.vercel.app/reset-password/${resetToken}`;
+
 
     // Send actual email to user
     try {

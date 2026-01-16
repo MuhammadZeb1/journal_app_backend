@@ -102,20 +102,46 @@ export const togglePublishManuscript = async (req, res) => {
 /**
  * GET a specific manuscript file (Admin can access any file)
  */
+// export const getManuscriptFile = async (req, res) => {
+
+//   try {
+//     const manuscript = await Manuscript.findById(req.params.id);
+//     if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
+
+//     res.setHeader("Content-Type", manuscript.contentType || "application/pdf");
+//     res.setHeader(
+//       "Content-Disposition",
+//       `inline; filename="${manuscript.filename}"`
+//     );
+
+//     // Convert string fileId to ObjectId
+//     const objectId = new mongoose.Types.ObjectId(manuscript.fileId);
+//     gfs.openDownloadStream(objectId).pipe(res);
+//   } catch (err) {
+//     res.status(500).json({ message: err.message });
+//   }
+// };
+
+
+import { Readable } from "stream";
+
 export const getManuscriptFile = async (req, res) => {
   try {
     const manuscript = await Manuscript.findById(req.params.id);
     if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
 
-    res.setHeader("Content-Type", manuscript.contentType || "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="${manuscript.filename}"`
-    );
-
-    // Convert string fileId to ObjectId
     const objectId = new mongoose.Types.ObjectId(manuscript.fileId);
-    gfs.openDownloadStream(objectId).pipe(res);
+    const downloadStream = gfs.openDownloadStream(objectId);
+
+    const chunks = [];
+    downloadStream.on("data", (chunk) => chunks.push(chunk));
+    downloadStream.on("error", (err) => res.status(500).json({ message: err.message }));
+    downloadStream.on("end", () => {
+      const fileBuffer = Buffer.concat(chunks);
+      res.setHeader("Content-Type", manuscript.contentType || "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${manuscript.filename}"`);
+      res.send(fileBuffer);
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
