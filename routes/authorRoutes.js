@@ -5,6 +5,7 @@ import {
   getMyManuscriptFile,
   updateMyManuscript,
   deleteMyManuscript,
+  downloadMyManuscript,
 } from "../controllers/manuscript.author.controller.js";
 import authMiddleware from "../middleware/authMiddleware.js";
 import upload  from "../config/multer.js"; // memory storage is essential for Vercel
@@ -15,6 +16,12 @@ const router = express.Router();
  * 1. Create new manuscript
  * Fields: 'file' (PDF/Word) and 'thumbnail' (Image)
  */
+router.get(
+  "/author/manuscripts/:id/download",
+  authMiddleware,
+  downloadMyManuscript
+);
+
 router.post(
   "/manuscripts",
   authMiddleware,

@@ -24,7 +24,8 @@ const app = express();
 app.use(express.json());
 app.use(
   cors({
-    origin: "https://journal-app-frontend-five.vercel.app", // 🌟 your frontend URL
+    origin: "https://www.psychologicaljournal.org", // 🌟 your frontend URL
+    // origin: "http://localhost:5173", // 🌟 your frontend URL
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],

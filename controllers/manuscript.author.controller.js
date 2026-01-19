@@ -1,8 +1,75 @@
 import Manuscript from "../models/Manuscript.js";
 import cloudinary from "../config/cloudinary.js";
 import streamifier from "streamifier";
+// import axios from "axios";
+
+
+
+
+
+
+import axios from "axios";
+
+export const downloadMyManuscript = async (req, res) => {
+  try {
+    const manuscript = await Manuscript.findById(req.params.id);
+    if (!manuscript) {
+      return res.status(404).json({ message: "Not found" });
+    }
+
+    // 🔐 ownership check (IMPORTANT)
+    if (manuscript.author.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Unauthorized" });
+    }
+
+    const extension = manuscript.filename.split(".").pop();
+
+    const publicId = manuscript.fileId.startsWith("manuscripts/")
+      ? manuscript.fileId
+      : `manuscripts/${manuscript.fileId}`;
+
+    // Cloudinary signed URL (PRIVATE)
+    const signedUrl = cloudinary.utils.private_download_url(
+      publicId,
+      extension,
+      {
+        resource_type: "raw",
+        type: "authenticated",
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      }
+    );
+
+    // ⬇️ STREAM FROM CLOUDINARY
+    const cloudinaryResponse = await axios.get(signedUrl, {
+      responseType: "stream",
+    });
+
+    // ✅ FORCE CORRECT DOWNLOAD NAME
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${manuscript.filename}"`
+    );
+
+    res.setHeader(
+      "Content-Type",
+      manuscript.contentType || "application/octet-stream"
+    );
+
+    cloudinaryResponse.data.pipe(res);
+  } catch (error) {
+    console.error("Download Error:", error);
+    res.status(500).json({ message: "File download failed" });
+  }
+};
+
+
+
 
 // --- Permission Helpers ---
+
+
+
+
 const isOwner = (manuscript, userId) => manuscript.author?.toString() === userId;
 const isPending = (manuscript) => manuscript.status === "pending";
 
@@ -33,9 +100,11 @@ const uploadToCloudinary = (fileBuffer, folder, resourceType = "raw") => {
  */
 const getPublicIdFromUrl = (url) => {
   if (!url) return null;
-  const parts = url.split("/");
-  const fileName = parts[parts.length - 1];
-  return fileName.split(".")[0]; 
+  // This version is safer for URLs like .../v12345/thumbnails/image.jpg
+  const parts = url.split('/');
+  const folder = parts[parts.length - 2]; // "thumbnails"
+  const fileName = parts[parts.length - 1].split('.')[0]; // "image"
+  return `${folder}/${fileName}`;
 };
 
 // --- Controllers ---
@@ -52,7 +121,7 @@ export const createManuscript = async (req, res) => {
 
     // 1. Upload Document (PDF/Word) as 'raw' and 'authenticated'
     const fileResult = await uploadToCloudinary(manuscriptFile.buffer, "manuscripts", "raw");
-
+   console.log("fileResult:",fileResult)
     // 2. Upload Thumbnail as 'image'
     let thumbnailUrl = "";
     if (thumbnailFile) {
@@ -72,7 +141,9 @@ export const createManuscript = async (req, res) => {
       imageUrl: thumbnailUrl,
       author: req.user.id,
       status: "pending",
+
     });
+    console.log("filname",manuscript)
 
     res.status(201).json(manuscript);
   } catch (err) {
@@ -92,35 +163,71 @@ export const getMyManuscripts = async (req, res) => {
 };
 
 /** GET Single Secure File (Signed URL) */
+/** GET Single Secure File (Signed PDF URL) */
 export const getMyManuscriptFile = async (req, res) => {
   try {
     const manuscript = await Manuscript.findById(req.params.id);
-    
-    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
-    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Access denied" });
+    if (!manuscript) {
+      return res.status(404).json({ message: "Not found" });
+    }
 
+    // ✅ extension original filename سے
     const extension = manuscript.filename.split('.').pop();
 
-    // Generate the Secure URL
+    // ✅ full public_id with folder
+    const publicId = manuscript.fileId.startsWith("manuscripts/")
+      ? manuscript.fileId
+      : `manuscripts/${manuscript.fileId}`;
+
+    // ✅ final download name (extension ensure)
+    const downloadName = manuscript.filename.toLowerCase().endsWith(`.${extension}`)
+      ? manuscript.filename
+      : `${manuscript.filename}.${extension}`;
+
     const signedUrl = cloudinary.utils.private_download_url(
-      manuscript.fileId,
+      publicId,
       extension,
-      { 
-        resource_type: "raw", 
-        type: "authenticated", 
+      {
+        resource_type: "raw",
+        type: "authenticated",
         expires_at: Math.floor(Date.now() / 1000) + 60,
-        attachment: manuscript.filename // Forces browser to download with original name
+        attachment: downloadName,
       }
     );
 
-    // Send the URL as JSON to prevent Axios CORS/Redirect errors
     res.json({ downloadUrl: signedUrl });
   } catch (err) {
-    console.error("Download Link Error:", err);
-    res.status(500).json({ message: "Error generating secure link" });
+    console.error(err);
+    res.status(500).json({ message: "Download error" });
   }
 };
 
+
+/** DELETE Manuscript - Fixed with type: authenticated */
+export const deleteMyManuscript = async (req, res) => {
+  try {
+    const manuscript = await Manuscript.findById(req.params.id);
+    if (!manuscript) return res.status(404).json({ message: "Not found" });
+    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Denied" });
+    if (!isPending(manuscript)) return res.status(400).json({ message: "Cannot delete" });
+
+    // FIXED: Added type: "authenticated" to ensure Cloudinary deletes the private file
+    await cloudinary.uploader.destroy(manuscript.fileId, { 
+      resource_type: "raw", 
+      type: "authenticated" 
+    });
+
+    if (manuscript.imageUrl) {
+      const thumbId = getPublicIdFromUrl(manuscript.imageUrl);
+      await cloudinary.uploader.destroy(thumbId).catch(() => null);
+    }
+
+    await manuscript.deleteOne();
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
 /** UPDATE Manuscript */
 export const updateMyManuscript = async (req, res) => {
   try {
@@ -136,7 +243,7 @@ export const updateMyManuscript = async (req, res) => {
     // A. Replace Main Document
     if (req.files?.file) {
       // Delete old file from Cloudinary first
-      await cloudinary.uploader.destroy(manuscript.fileId, { resource_type: "raw" });
+      await cloudinary.uploader.destroy(manuscript.fileId, { resource_type: "raw" ,type: "authenticated"});
       
       const result = await uploadToCloudinary(req.files.file[0].buffer, "manuscripts", "raw");
       
@@ -166,27 +273,27 @@ export const updateMyManuscript = async (req, res) => {
 };
 
 /** DELETE Manuscript */
-export const deleteMyManuscript = async (req, res) => {
-  try {
-    const manuscript = await Manuscript.findById(req.params.id);
-    if (!manuscript) return res.status(404).json({ message: "Not found" });
-    if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Denied" });
-    if (!isPending(manuscript)) return res.status(400).json({ message: "Cannot delete after submission" });
+// export const deleteMyManuscript = async (req, res) => {
+//   try {
+//     const manuscript = await Manuscript.findById(req.params.id);
+//     if (!manuscript) return res.status(404).json({ message: "Not found" });
+//     if (!isOwner(manuscript, req.user.id)) return res.status(403).json({ message: "Denied" });
+//     if (!isPending(manuscript)) return res.status(400).json({ message: "Cannot delete after submission" });
 
-    // 1. Delete Main File (Private Raw)
-    await cloudinary.uploader.destroy(manuscript.fileId, { resource_type: "raw" });
+//     // 1. Delete Main File (Private Raw)
+//     await cloudinary.uploader.destroy(manuscript.fileId, { resource_type: "raw" });
 
-    // 2. Delete Thumbnail if exists
-    if (manuscript.imageUrl) {
-      const thumbId = `thumbnails/${getPublicIdFromUrl(manuscript.imageUrl)}`;
-      await cloudinary.uploader.destroy(thumbId).catch(() => null);
-    }
+//     // 2. Delete Thumbnail if exists
+//     if (manuscript.imageUrl) {
+//       const thumbId = `thumbnails/${getPublicIdFromUrl(manuscript.imageUrl)}`;
+//       await cloudinary.uploader.destroy(thumbId).catch(() => null);
+//     }
 
-    // 3. Delete from DB
-    await manuscript.deleteOne();
+//     // 3. Delete from DB
+//     await manuscript.deleteOne();
     
-    res.json({ message: "Manuscript and all files deleted successfully" });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
+//     res.json({ message: "Manuscript and all files deleted successfully" });
+//   } catch (err) {
+//     res.status(500).json({ message: err.message });
+//   }
+// };
