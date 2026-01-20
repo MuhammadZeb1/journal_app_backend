@@ -43,8 +43,8 @@ export const googleAuthSuccess = async (req, res) => {
       { expiresIn: "1d" }
     );
 
-    // res.redirect(`http://localhost:5173/login-success?token=${token}`);
-    res.redirect(`https://journal-app-frontend-five.vercel.app/login-success?token=${token}`);
+    res.redirect(`http://localhost:5173/login-success?token=${token}`);
+    // res.redirect(`https://journal-app-frontend-five.vercel.app/login-success?token=${token}`);
   } catch (error) {
     res.status(500).json({ message: "Google Auth Failed" });
   }
@@ -76,6 +76,8 @@ export const login = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
+  
+    console.log("token ",token)
 
     res.json({ token });
   } catch (error) {

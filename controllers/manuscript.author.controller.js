@@ -17,18 +17,22 @@ export const downloadMyManuscript = async (req, res) => {
       return res.status(404).json({ message: "Not found" });
     }
 
-    // 🔐 ownership check (IMPORTANT)
+    // Ownership check
     if (manuscript.author.toString() !== req.user.id) {
       return res.status(403).json({ message: "Unauthorized" });
     }
 
+    // Ensure correct extension
     const extension = manuscript.filename.split(".").pop();
+    const downloadName = manuscript.filename.toLowerCase().endsWith(`.${extension}`)
+      ? manuscript.filename
+      : `${manuscript.filename}.${extension}`;
 
     const publicId = manuscript.fileId.startsWith("manuscripts/")
       ? manuscript.fileId
       : `manuscripts/${manuscript.fileId}`;
 
-    // Cloudinary signed URL (PRIVATE)
+    // Generate signed URL
     const signedUrl = cloudinary.utils.private_download_url(
       publicId,
       extension,
@@ -36,31 +40,30 @@ export const downloadMyManuscript = async (req, res) => {
         resource_type: "raw",
         type: "authenticated",
         expires_at: Math.floor(Date.now() / 1000) + 60,
+        attachment: downloadName, // ensures correct filename on download
       }
     );
 
-    // ⬇️ STREAM FROM CLOUDINARY
+    // Stream file from Cloudinary
     const cloudinaryResponse = await axios.get(signedUrl, {
       responseType: "stream",
     });
 
-    // ✅ FORCE CORRECT DOWNLOAD NAME
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${manuscript.filename}"`
-    );
-
+    // Set proper headers
+    res.setHeader("Content-Disposition", `attachment; filename="${downloadName}"`);
     res.setHeader(
       "Content-Type",
       manuscript.contentType || "application/octet-stream"
     );
 
     cloudinaryResponse.data.pipe(res);
+
   } catch (error) {
     console.error("Download Error:", error);
     res.status(500).json({ message: "File download failed" });
   }
 };
+
 
 
 

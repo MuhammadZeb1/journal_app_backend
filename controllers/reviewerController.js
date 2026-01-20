@@ -1,5 +1,7 @@
 import Manuscript from "../models/Manuscript.js";
 import { gfs } from "../config/gridfs.js";
+import cloudinary from "../config/cloudinary.js";
+import axios from "axios";
 
 /**
  * GET assigned manuscripts
@@ -28,15 +30,37 @@ export const getAssignedManuscriptFile = async (req, res) => {
     if (manuscript.reviewer?.toString() !== req.user.id)
       return res.status(403).json({ message: "Access denied" });
 
-    res.setHeader("Content-Type", manuscript.contentType);
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="${manuscript.filename}"`
+    const extension = manuscript.filename.split(".").pop();
+    const downloadName = manuscript.filename.toLowerCase().endsWith(`.${extension}`)
+      ? manuscript.filename
+      : `${manuscript.filename}.${extension}`;
+
+    const publicId = manuscript.fileId.startsWith("manuscripts/")
+      ? manuscript.fileId
+      : `manuscripts/${manuscript.fileId}`;
+
+    // Generate signed Cloudinary URL
+    const signedUrl = cloudinary.utils.private_download_url(
+      publicId,
+      extension,
+      {
+        resource_type: "raw",
+        type: "authenticated",
+        expires_at: Math.floor(Date.now() / 1000) + 60, // 1 minute
+        attachment: downloadName,
+      }
     );
 
-    gfs.openDownloadStream(manuscript.fileId).pipe(res);
+    // Stream file to the reviewer
+    const cloudinaryResponse = await axios.get(signedUrl, { responseType: "stream" });
+
+    res.setHeader("Content-Disposition", `attachment; filename="${downloadName}"`);
+    res.setHeader("Content-Type", manuscript.contentType || "application/octet-stream");
+
+    cloudinaryResponse.data.pipe(res);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("Reviewer Download Error:", err);
+    res.status(500).json({ message: "File download failed" });
   }
 };
 

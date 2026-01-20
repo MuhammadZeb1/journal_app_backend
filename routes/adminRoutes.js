@@ -5,7 +5,7 @@ import {
   getAllManuscripts,
   assignReviewer,
   togglePublishManuscript,
-  getManuscriptFile,
+  downloadManuscriptAdmin, // updated import
   getAllExperts,
 } from "../controllers/adminController.js";
 
@@ -13,7 +13,6 @@ const router = express.Router();
 
 /**
  * APPLY MIDDLEWARE GLOBALLY TO THIS ROUTER
- * This is much cleaner than adding them to every single route.
  * First check if logged in (authMiddleware), then check if Admin.
  */
 router.use(authMiddleware);
@@ -33,7 +32,7 @@ router.post("/manuscripts/assign-reviewer", assignReviewer);
 // Publish / Unpublish
 router.post("/manuscripts/publish-toggle", togglePublishManuscript);
 
-// Download file
-router.get("/manuscripts/:id/file", getManuscriptFile);
+// Download file (Admin can access any manuscript)
+router.get("/manuscripts/:id/download", downloadManuscriptAdmin);
 
 export default router;

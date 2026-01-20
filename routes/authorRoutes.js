@@ -17,7 +17,7 @@ const router = express.Router();
  * Fields: 'file' (PDF/Word) and 'thumbnail' (Image)
  */
 router.get(
-  "/author/manuscripts/:id/download",
+  "/manuscripts/:id/download",
   authMiddleware,
   downloadMyManuscript
 );

@@ -1,8 +1,64 @@
 // controllers/adminController.js
 import Manuscript from "../models/Manuscript.js";
 import User from "../models/User.js";
-import { gfs } from "../config/gridfs.js";
-import mongoose from "mongoose";
+import cloudinary from "../config/cloudinary.js";
+import axios from "axios";
+
+/**
+ * STREAM Cloudinary file helper (used for both Author & Admin)
+ */
+const streamCloudinaryFile = async (res, manuscript) => {
+  if (!manuscript || !manuscript.fileId) {
+    return res.status(404).json({ message: "File not found" });
+  }
+
+  // Ensure correct extension
+  const extension = manuscript.filename.split(".").pop();
+  const downloadName = manuscript.filename.toLowerCase().endsWith(`.${extension}`)
+    ? manuscript.filename
+    : `${manuscript.filename}.${extension}`;
+
+  const publicId = manuscript.fileId.startsWith("manuscripts/")
+    ? manuscript.fileId
+    : `manuscripts/${manuscript.fileId}`;
+
+  // Generate signed Cloudinary URL
+  const signedUrl = cloudinary.utils.private_download_url(
+    publicId,
+    extension,
+    {
+      resource_type: "raw",
+      type: "authenticated",
+      expires_at: Math.floor(Date.now() / 1000) + 60,
+      attachment: downloadName,
+    }
+  );
+
+  // Stream file
+  const cloudinaryResponse = await axios.get(signedUrl, { responseType: "stream" });
+
+  // Set proper headers
+  res.setHeader("Content-Disposition", `attachment; filename="${downloadName}"`);
+  res.setHeader("Content-Type", manuscript.contentType || "application/octet-stream");
+
+  cloudinaryResponse.data.pipe(res);
+};
+
+/**
+ * Admin download: get any manuscript file
+ */
+export const downloadManuscriptAdmin = async (req, res) => {
+  try {
+    const manuscript = await Manuscript.findById(req.params.id.trim());
+    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
+
+    // Admin can download any file
+    await streamCloudinaryFile(res, manuscript);
+  } catch (err) {
+    console.error("Admin Download Error:", err);
+    res.status(500).json({ message: "File download failed" });
+  }
+};
 
 /**
  * GET all manuscripts
@@ -21,7 +77,6 @@ export const getAllManuscripts = async (req, res) => {
 
 /**
  * GET all experts
- * Admin can assign reviewers
  */
 export const getAllExperts = async (req, res) => {
   try {
@@ -33,21 +88,17 @@ export const getAllExperts = async (req, res) => {
 };
 
 /**
- * ASSIGN reviewer to a manuscript
- * Only allowed if status is pending
+ * ASSIGN reviewer
  */
 export const assignReviewer = async (req, res) => {
   try {
     const { manuscriptId, reviewerId } = req.body;
 
     const manuscript = await Manuscript.findById(manuscriptId);
-    if (!manuscript)
-      return res.status(404).json({ message: "Manuscript not found" });
+    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
 
     if (manuscript.status !== "pending")
-      return res
-        .status(400)
-        .json({ message: "Cannot assign reviewer after submission" });
+      return res.status(400).json({ message: "Cannot assign reviewer after submission" });
 
     const reviewer = await User.findById(reviewerId);
     if (!reviewer || reviewer.role !== "expert")
@@ -72,11 +123,9 @@ export const togglePublishManuscript = async (req, res) => {
   try {
     const { manuscriptId } = req.body;
     const manuscript = await Manuscript.findById(manuscriptId);
-    if (!manuscript)
-      return res.status(404).json({ message: "Manuscript not found" });
+    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
 
     if (manuscript.status === "accepted") {
-      // Publish
       manuscript.status = "published";
       manuscript.publishedAt = new Date();
       await manuscript.save();
@@ -84,7 +133,6 @@ export const togglePublishManuscript = async (req, res) => {
     }
 
     if (manuscript.status === "published") {
-      // Unpublish → revert to accepted
       manuscript.status = "accepted";
       manuscript.publishedAt = null;
       await manuscript.save();
@@ -96,59 +144,5 @@ export const togglePublishManuscript = async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
-  }
-};
-
-/**
- * GET a specific manuscript file (Admin can access any file)
- */
-// export const getManuscriptFile = async (req, res) => {
-
-//   try {
-//     const manuscript = await Manuscript.findById(req.params.id);
-//     if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
-
-//     res.setHeader("Content-Type", manuscript.contentType || "application/pdf");
-//     res.setHeader(
-//       "Content-Disposition",
-//       `inline; filename="${manuscript.filename}"`
-//     );
-
-//     // Convert string fileId to ObjectId
-//     const objectId = new mongoose.Types.ObjectId(manuscript.fileId);
-//     gfs.openDownloadStream(objectId).pipe(res);
-//   } catch (err) {
-//     res.status(500).json({ message: err.message });
-//   }
-// };
-
-
-import { Readable } from "stream";
-
-export const getManuscriptFile = async (req, res) => {
-  try {
-    const manuscript = await Manuscript.findById(req.params.id);
-    if (!manuscript) return res.status(404).json({ message: "Manuscript not found" });
-
-    const objectId = new mongoose.Types.ObjectId(manuscript.fileId);
-
-    // Force the stream into a Promise so Vercel doesn't kill the function early
-    const fileBuffer = await new Promise((resolve, reject) => {
-      const chunks = [];
-      const downloadStream = gfs.openDownloadStream(objectId);
-
-      downloadStream.on("data", (chunk) => chunks.push(chunk));
-      downloadStream.on("error", (err) => reject(err));
-      downloadStream.on("end", () => resolve(Buffer.concat(chunks)));
-    });
-
-    res.setHeader("Content-Type", manuscript.contentType || "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${manuscript.filename}"`);
-    
-    // This will fail if fileBuffer > 4.5MB
-    return res.send(fileBuffer);
-
-  } catch (err) {
-    return res.status(500).json({ message: "Vercel Limit or DB Error: " + err.message });
   }
 };
